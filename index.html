@@ -1,0 +1,281 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Khảo Sát Kiếm Thưởng - CPX</title>
+    <link rel="stylesheet" href="style.css">
+    <!-- Supabase JS client qua CDN -->
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+</head>
+<body>
+    <header>
+        <h1>Chào mừng đến với Khảo Sát Kiếm Thưởng</h1>
+        <p>Làm khảo sát nhanh → Nhận điểm thưởng → Rút tiền thật!</p>
+    </header>
+
+    <!-- Phần Đăng ký / Đăng nhập -->
+    <section id="auth-section">
+        <h2>Đăng nhập / Đăng ký</h2>
+        <input type="email" id="email" placeholder="Email của bạn" required>
+        <input type="password" id="password" placeholder="Mật khẩu" required>
+        <input type="text" id="username" placeholder="Username (chỉ dùng khi đăng ký)">
+        <button id="register-btn">Đăng ký</button>
+        <button id="login-btn">Đăng nhập</button>
+        <p id="auth-message" style="color: red;"></p>
+    </section>
+
+    <!-- Phần thông tin user & điểm thưởng -->
+    <section id="user-section" style="display: none;">
+        <h2>Xin chào, <span id="username-display"></span>!</h2>
+        <p>Điểm thưởng hiện tại: <strong id="rewards-display">0</strong> điểm</p>
+        <button id="logout-btn">Đăng xuất</button>
+    </section>
+
+    <!-- Phần khảo sát CPX -->
+    <section id="survey-section" style="display: none;">
+        <h2>Khảo sát có sẵn - Làm để kiếm điểm</h2>
+        <div id="cpx-container" style="max-width: 950px; margin: 20px auto; min-height: 500px; border: 1px solid #ddd; border-radius: 8px;"></div>
+    </section>
+
+    <!-- Script chính -->
+    <script>
+        // ==================== KHỞI TẠO SUPABASE CLIENT ====================
+        const SUPABASE_URL = 'https://bieaxurxdpzsbdzycvph.supabase.co';
+        const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImJpZWF4dXJ4ZHB6c2JkenljdnBoIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzA4MjQ2NTQsImV4cCI6MjA4NjQwMDY1NH0.IqCXMO8i_VbTJzuUVg7Tj0oAI8v5G9qt-iCud71ol58';
+
+        const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+        let currentUserId = null;
+
+        // ==================== TẠO PROFILE NẾU CHƯA CÓ ====================
+        async function createProfileIfNotExists() {
+            const { data: { session } } = await sb.auth.getSession();
+            if (!session?.user) return;
+
+            const user = session.user;
+            const usernameFallback = user.user_metadata?.username || user.email.split('@')[0] || 'user_' + user.id.slice(0, 8);
+
+            console.log('Kiểm tra profile cho user:', user.id);
+
+            // Kiểm tra profile đã tồn tại chưa
+            const { data: existing, error: checkError } = await sb
+                .from('profiles')
+                .select('id')
+                .eq('id', user.id)
+                .maybeSingle();
+
+            if (checkError) {
+                console.error('Lỗi kiểm tra profile:', checkError);
+                return;
+            }
+
+            if (existing) {
+                console.log('Profile đã tồn tại, bỏ qua tạo mới');
+                return;
+            }
+
+            // Tạo mới
+            const { error } = await sb
+                .from('profiles')
+                .insert([{ 
+                    id: user.id, 
+                    username: usernameFallback, 
+                    rewards: 0 
+                }]);
+
+            if (error) {
+                console.error('Lỗi tạo profile tự động:', error);
+                if (error.code !== '23505') { // 23505 = unique violation (đã có)
+                    alert('Lỗi tạo profile: ' + error.message);
+                }
+            } else {
+                console.log('Tạo profile mới thành công!');
+            }
+        }
+
+        // ==================== HÀM LOAD ĐIỂM THƯỞNG ====================
+        async function loadRewards() {
+            if (!currentUserId) return;
+
+            const { data, error } = await sb
+                .from('profiles')
+                .select('rewards, username')
+                .eq('id', currentUserId)
+                .maybeSingle();  // Dùng maybeSingle thay single để tránh throw error khi 0 rows
+
+            if (error) {
+                console.error('Lỗi load rewards:', error);
+                return;
+            }
+
+            if (!data) {
+                console.log('Chưa có profile → tạo mới');
+                await createProfileIfNotExists();
+                // Load lại sau khi tạo
+                return loadRewards();
+            }
+
+            document.getElementById('rewards-display').textContent = data.rewards || 0;
+            document.getElementById('username-display').textContent = data.username || 'User';
+        }
+
+        // ==================== CHECK SESSION KHI LOAD TRANG ====================
+        async function checkSession() {
+            const { data: { session } } = await sb.auth.getSession();
+            if (session?.user) {
+                currentUserId = session.user.id;
+                await createProfileIfNotExists();  // Tự động tạo profile nếu thiếu
+                document.getElementById('auth-section').style.display = 'none';
+                document.getElementById('user-section').style.display = 'block';
+                document.getElementById('survey-section').style.display = 'block';
+                await loadRewards();
+                initCPXSurveys();
+            }
+        }
+
+        // ==================== KHỞI TẠO KHẢO SÁT CPX ====================
+        function initCPXSurveys() {
+            if (!currentUserId) {
+                console.warn('Chưa login → không load CPX');
+                return;
+            }
+
+            const scriptConfig = {
+                div_id: "cpx-container",
+                theme_style: 1,
+                order_by: 2,
+                limit_surveys: 10
+            };
+
+            window.config = {
+                general_config: {
+                    app_id: "31403",
+                    ext_user_id: currentUserId,
+                    subid_1: "vn-survey-web",
+                },
+                style_config: {
+                    text_color: "#333333",
+                    survey_box: {
+                        topbar_background_color: "#4CAF50",
+                        box_background_color: "#ffffff",
+                        rounded_borders: true,
+                        stars_filled: "#FFD700"
+                    }
+                },
+                script_config: [scriptConfig],
+                debug: true,
+                useIFrame: true,
+                iFramePosition: 1,
+                functions: {
+                    no_surveys_available: () => {
+                        document.getElementById('cpx-container').innerHTML = '<p style="text-align:center;padding:20px;">Hiện không có khảo sát phù hợp với bạn. Thử lại sau nhé!</p>';
+                    },
+                    count_new_surveys: (count) => {
+                        console.log(`Có ${count} khảo sát mới`);
+                    },
+                    get_transaction: async (transactions) => {
+                        console.log('Khảo sát hoàn thành! Data:', transactions);
+                        const rewardAmount = transactions?.reward || 100;
+                        try {
+                            const res = await fetch('http://localhost:3000/update-reward', {
+                                method: 'POST',
+                                headers: { 'Content-Type': 'application/json' },
+                                body: JSON.stringify({
+                                    ext_user_id: currentUserId,
+                                    reward_amount: rewardAmount
+                                })
+                            });
+                            const data = await res.json();
+                            if (data.success) {
+                                await loadRewards();
+                                alert(`Bạn vừa kiếm được ${rewardAmount} điểm!`);
+                            } else {
+                                console.error('Update thưởng thất bại:', data);
+                            }
+                        } catch (err) {
+                            console.error('Lỗi gọi backend:', err);
+                        }
+                    }
+                }
+            };
+
+            if (!document.querySelector('script[src*="script_tag_v2.0.js"]')) {
+                const script = document.createElement('script');
+                script.src = 'https://cdn.cpx-research.com/assets/js/script_tag_v2.0.js';
+                script.async = true;
+                document.body.appendChild(script);
+            }
+        }
+
+        // ==================== EVENT LISTENERS ====================
+        document.getElementById('register-btn').addEventListener('click', async () => {
+            const email = document.getElementById('email').value.trim();
+            const password = document.getElementById('password').value.trim();
+            const username = document.getElementById('username').value.trim();
+
+            if (!email || !password || !username) {
+                document.getElementById('auth-message').textContent = 'Vui lòng điền đầy đủ thông tin!';
+                return;
+            }
+
+            // Đăng ký Auth
+            const { data: signUpData, error: signUpError } = await sb.auth.signUp({
+                email,
+                password,
+                options: { data: { username } }
+            });
+
+            if (signUpError) {
+                document.getElementById('auth-message').textContent = signUpError.message;
+                console.error('Lỗi đăng ký Auth:', signUpError);
+                return;
+            }
+
+            // Gọi backend để tạo profile
+            try {
+                const res = await fetch('http://localhost:3000/register', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ email, password, username })
+                });
+
+                const backendData = await res.json();
+
+                if (!res.ok || !backendData.success) {
+                    console.error('Backend error:', backendData);
+                    document.getElementById('auth-message').textContent = backendData.message || 'Lỗi tạo profile';
+                    return;
+                }
+
+                document.getElementById('auth-message').textContent = 'Đăng ký thành công! Kiểm tra email để xác nhận.';
+                console.log('Đăng ký hoàn tất - profile đã được tạo');
+            } catch (err) {
+                console.error('Lỗi kết nối backend:', err);
+                document.getElementById('auth-message').textContent = 'Không kết nối được server';
+            }
+        });
+
+        document.getElementById('login-btn').addEventListener('click', async () => {
+            const email = document.getElementById('email').value.trim();
+            const password = document.getElementById('password').value.trim();
+
+            const { data, error } = await sb.auth.signInWithPassword({ email, password });
+            if (error) {
+                document.getElementById('auth-message').textContent = error.message;
+            } else {
+                currentUserId = data.user.id;
+                document.getElementById('auth-message').textContent = '';
+                checkSession();
+            }
+        });
+
+        document.getElementById('logout-btn').addEventListener('click', async () => {
+            await sb.auth.signOut();
+            location.reload();
+        });
+
+        // Load trang đầu tiên
+        checkSession();
+    </script>
+</body>
+</html>
