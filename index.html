@@ -177,7 +177,7 @@
                         console.log('Khảo sát hoàn thành! Data:', transactions);
                         const rewardAmount = transactions?.reward || 100;
                         try {
-                            const res = await fetch('http://localhost:3000/update-reward', {
+                            const res = await fetch('https://surveycuatao.onrender.com/update-reward', {
                                 method: 'POST',
                                 headers: { 'Content-Type': 'application/json' },
                                 body: JSON.stringify({
@@ -233,7 +233,7 @@
 
             // Gọi backend để tạo profile
             try {
-                const res = await fetch('http://localhost:3000/register', {
+                const res = await fetch('https://surveycuatao.onrender.com/register', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ email, password, username })
@@ -278,4 +278,5 @@
         checkSession();
     </script>
 </body>
+
 </html>
